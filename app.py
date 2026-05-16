@@ -2,7 +2,7 @@
 
 from flask import Flask, request, jsonify
 import asyncio
-import main  # bot と send_queue を使う
+import main  # bot, send_queue, bot_ready を使う
 
 app = Flask(__name__)
 
@@ -12,6 +12,9 @@ def ping():
 
 @app.post("/post")
 def post_message():
+    if not main.bot_ready:
+        return jsonify({"status": "bot_not_ready"}), 503
+
     data = request.json or {}
     channel_id = data.get("channelId")
     message = data.get("message")
@@ -32,6 +35,9 @@ def post_message():
 
 @app.post("/postCastleEvent")
 def post_castle_event():
+    if not main.bot_ready:
+        return jsonify({"status": "bot_not_ready"}), 503
+
     data = request.json or {}
     channel_id = data.get("channelId")
     text = data.get("text")
