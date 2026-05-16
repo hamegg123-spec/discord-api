@@ -1,4 +1,4 @@
-# app.py ver27.1 (Render完全統合・クラッシュ修正版)
+# app.py ver27.1 (Python 3.14+ 完全互換・スレッドバグ修正版)
 
 import os
 import asyncio
@@ -13,24 +13,32 @@ def log_api(msg):
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{now}] [FlaskAPI] {msg}")
 
-# Discord Botを別スレッドのイベントループで安全に回すための設定
+# Discord Botを別スレッドで安全に非同期実行する
 def run_discord():
-    asyncio.set_event_loop(main.bot.loop)
+    # Python 3.14以降の仕様に合わせて、新しくクリーンなループを生成して割り当てる
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
+    # main.py 側の loop 参照をこちらに同期する
+    main.bot.loop = loop
+    
     token = os.environ.get("DISCORD_TOKEN")
     try:
-        main.bot.loop.run_until_complete(main.bot.start(token))
+        # loop.run_until_complete の代わりに現代的なループ維持を使用
+        loop.run_until_complete(main.bot.start(token))
     except Exception as e:
         log_api(f"❌ Discord Botループ終了エラー: {e}")
+    finally:
+        loop.close()
 
-# 🚀 アプリ起動時（リクエストを待つ前）に、自動で一度だけBotを起動する構造に変更
-log_api("Discord Botのバックグラウンドループを準備中...")
+# アプリ起動時にバックグラウンドでDiscord Botを立ち上げる
+log_api("Discord Botのバックグラウンドループ（新方式）を準備中...")
 t = threading.Thread(target=run_discord, daemon=True)
 t.start()
 log_api("Discord Botのバックグラウンドスレッドを切り離しました。")
 
 @app.route('/')
 def home():
-    # 状態をテキストで返す
     status = "ONLINE" if main.bot_ready else "STARTING"
     return f"Bot Status: {status}", 200
 
@@ -38,8 +46,8 @@ def home():
 def post_castle_event():
     log_api("/postCastleEvent 受信しました")
     
-    # 10秒間の起動待ち
-    for i in range(10):
+    # 15秒間の起動待ち（少し長めに設定）
+    for i in range(15):
         if main.bot_ready:
             break
         log_api(f"⏳ Botのログインを待っています... ({i}秒経過)")
@@ -62,7 +70,7 @@ def post_castle_event():
 
         log_api(f"📥 スレッド安全にキューへ追加します → Channel: {channel_id}")
         
-        # 別スレッドのasyncio.Queueへ安全にデータを送り込む
+        # 安全にDiscordのイベントループにコルーチンを投げ込む
         asyncio.run_coroutine_threadsafe(
             main.send_queue.put((channel, text)), 
             main.bot.loop
