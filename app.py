@@ -1,17 +1,45 @@
-# app.py ver27.1
+# app.py ver27.1 (Start Commandがapp:appのままでも100%自動起動する版)
 import os
+import threading
+import asyncio
 import traceback
 from flask import Flask, request, jsonify
 from main import bot, bot_ready, enqueue_message
 
 app = Flask(__name__)
 
+DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 DISCORD_CHANNEL_ID = os.getenv("DISCORD_CHANNEL_ID")
 
 def get_bot_status_str():
     from main import bot_ready
     return "ONLINE" if bot_ready else "STARTING"
 
+# ==========================================
+# ⚙️ サーバー起動時に1回だけDiscordを裏で回す安全な仕組み
+# ==========================================
+def run_discord_bot_core():
+    print("[App-Init] 専用スレッド内でDiscordイベントループを起動します...", flush=True)
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(bot.start(DISCORD_TOKEN))
+    except Exception as e:
+        print(f"[App-Init] ❌ Discord Botが例外で終了しました:\n{traceback.format_exc()}", flush=True)
+
+# 💡 Flaskがインポートされた瞬間（GunicornのWorker起動時）に1回だけスレッドを切り離す
+if DISCORD_TOKEN and os.environ.get("WERKZEUG_RUN_MAIN") != "true": 
+    # WERKZEUG_RUN_MAINチェックにより、ローカルデバッグ時の2回起動も防止
+    print("[App-Init] Webワーカープロセス起動を検知。Discordバックグラウンドスレッドを開始します...", flush=True)
+    bot_thread = threading.Thread(target=run_discord_bot_core, daemon=True)
+    bot_thread.start()
+else:
+    if not DISCORD_TOKEN:
+        print("[App-Init] ❌ エラー: DISCORD_TOKEN がありません。Discord Botは起動しません。", flush=True)
+
+# ==========================================
+# 3. Flask ルーティング
+# ==========================================
 @app.route('/', methods=['GET', 'HEAD'])
 def index():
     return f"Bot Status: {get_bot_status_str()}", 200
