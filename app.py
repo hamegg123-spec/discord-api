@@ -1,4 +1,4 @@
-# app.py ver27.1 (Gunicorn対応・循環インポート完全分離版)
+# app.py ver27.1 (Gunicorn対応・循環インポート完全分離・ログレベル制御版)
 import os
 import threading
 import time
@@ -11,6 +11,9 @@ import state
 
 app = Flask(__name__)
 
+# 環境変数からログレベルを取得 (デフォルトは INFO)
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 DISCORD_CHANNEL_ID = os.getenv("DISCORD_CHANNEL_ID")
 
@@ -20,9 +23,17 @@ bot_thread_started = False
 # ログ用のリクエストカウンター
 request_counter = 0
 
-def log_system(msg):
-    """標準出力に即座にログをフラッシュする関数"""
-    print(f"[SYSTEM-DEBUG] [{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}", flush=True)
+def log_system(msg, level="DEBUG"):
+    """
+    指定されたレベルが現在のLOG_LEVELを満たしている場合のみ出力する関数。
+    重要度が ERROR > WARNING > INFO > DEBUG の順で判定します。
+    """
+    levels = {"DEBUG": 0, "INFO": 1, "WARNING": 2, "ERROR": 3}
+    current_idx = levels.get(LOG_LEVEL, 1)  # 不正な値ならINFO扱い
+    msg_idx = levels.get(level.upper(), 0)
+
+    if msg_idx >= current_idx:
+        print(f"[SYSTEM-{level.upper()}] [{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}", flush=True)
 
 def get_bot_status_str():
     """独立したstateファイルからフラグを読み取るため、絶対にエラーを吐かない"""
@@ -33,31 +44,31 @@ def get_bot_status_str():
         return "ONLINE"
 
 def run_discord_bot_core():
-    log_system("⚠️ バックグラウンドスレッド: 5秒間の待機(time.sleep)を開始します...")
+    log_system("⚠️ バックグラウンドスレッド: 5秒間の待機(time.sleep)を開始します...", "INFO")
     time.sleep(5)
-    log_system("⚠️ バックグラウンドスレッド: 待機終了。モジュールのインポートを開始します...")
+    log_system("⚠️ バックグラウンドスレッド: 待機終了。モジュールのインポートを開始します...", "INFO")
     
     try:
         import asyncio
-        log_system("⚠️ asyncio インポート完了。main.py から bot をインポートします...")
+        log_system("⚠️ asyncio インポート完了。main.py から bot をインポートします...", "DEBUG")
         
         start_time = time.time()
         from main import bot
-        log_system(f"⚠️ main.py のインポートが完了しました (所要時間: {time.time() - start_time:.2f}秒)")
+        log_system(f"⚠️ main.py のインポートが完了しました (所要時間: {time.time() - start_time:.2f}秒)", "INFO")
         
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         
-        log_system("⚠️ bot.start() を呼び出します。Discordへの接続を開始...")
+        log_system("⚠️ bot.start() を呼び出します。Discordへの接続を開始...", "INFO")
         loop.run_until_complete(bot.start(DISCORD_TOKEN))
-        log_system("⚠️ bot.start() ループが正常に終了しました（通常ここには到達しません）")
+        log_system("⚠️ bot.start() ループが正常に終了しました（通常ここには到達しません）", "WARNING")
         
     except Exception as e:
-        log_system(f"❌ 【致命的】バックグラウンドスレッド内でエラーが発生しました:\n{traceback.format_exc()}")
+        log_system(f"❌ 【致命的】バックグラウンドスレッド内でエラーが発生しました:\n{traceback.format_exc()}", "ERROR")
 
 def ensure_bot_started():
     global bot_thread_started
-    log_system(f"ensure_bot_started が呼ばれました。現在のフラグ: {bot_thread_started}, PID: {os.getpid()}")
+    log_system(f"ensure_bot_started が呼ばれました。現在のフラグ: {bot_thread_started}, PID: {os.getpid()}", "DEBUG")
     
     if bot_thread_started:
         return
@@ -67,13 +78,13 @@ def ensure_bot_started():
             return
 
         if DISCORD_TOKEN:
-            log_system("🤖 Discordバックグラウンドスレッドを作成し、起動します...")
+            log_system("🤖 Discordバックグラウンドスレッドを作成し、起動します...", "INFO")
             bot_thread = threading.Thread(target=run_discord_bot_core, daemon=True)
             bot_thread.start()
             bot_thread_started = True
-            log_system(f"🤖 スレッド起動完了。スレッド名: {bot_thread.name}")
+            log_system(f"🤖 スレッド起動完了。スレッド名: {bot_thread.name}", "INFO")
         else:
-            log_system("❌ エラー: DISCORD_TOKEN が環境変数に設定されていません。")
+            log_system("❌ エラー: DISCORD_TOKEN が環境変数に設定されていません。", "ERROR")
 
 # ==========================================
 # 🛠️ スレッド生存監視用のチェッカー（10秒おきに状態を出力）
@@ -82,10 +93,10 @@ def monitor_threads():
     while True:
         try:
             active_threads = [t.name for t in threading.enumerate()]
-            log_system(f"【定期巡回】生存スレッド一覧: {active_threads} | メインPID: {os.getpid()}")
-            log_system(f"【定期巡回】Bot状態確認: {get_bot_status_str()}")
+            log_system(f"【定期巡回】生存スレッド一覧: {active_threads} | メインPID: {os.getpid()}", "DEBUG")
+            log_system(f"【定期巡回】Bot状態確認: {get_bot_status_str()}", "DEBUG")
         except Exception as e:
-            log_system(f"チェッカー内エラー: {e}")
+            log_system(f"チェッカー内エラー: {e}", "ERROR")
         time.sleep(10)
 
 monitor_thread = threading.Thread(target=monitor_threads, daemon=True, name="SystemMonitor")
@@ -100,24 +111,24 @@ def index():
     request_counter += 1
     
     ua = request.headers.get('User-Agent', 'Unknown')
-    log_system(f"📥 [GET /] 受信 (通算 {request_counter} 回目) | UA: {ua} | IP: {request.remote_addr}")
+    log_system(f"📥 [GET /] 受信 (通算 {request_counter} 回目) | UA: {ua} | IP: {request.remote_addr}", "DEBUG")
     
     status = get_bot_status_str()
-    log_system(f"📤 [GET /] レスポンス返却直前。ステータス: {status}")
+    log_system(f"📤 [GET /] レスポンス返却直前。ステータス: {status}", "DEBUG")
     return f"Bot Status: {status}", 200
 
 @app.route('/postCastleEvent', methods=['POST'])
 def post_castle_event():
-    log_system("[FlaskAPI] --- /postCastleEvent にリクエストを受信しました ---")
+    log_system("[FlaskAPI] --- /postCastleEvent にリクエストを受信しました ---", "INFO")
     try:
         from main import enqueue_message
     except Exception as e:
-        log_system(f"❌ POSTエラー: mainからのインポート失敗: {e}")
+        log_system(f"❌ POSTエラー: mainからのインポート失敗: {e}", "ERROR")
         return jsonify({"status": "error", "message": "System initializing"}), 503
 
     # stateファイルからログイン状態を安全に取得
     if not state.bot_ready:
-        log_system("⚠️ POST警告: Discord Botがログインしていません。503を返します。")
+        log_system("⚠️ POST警告: Discord Botがログインしていません。503を返します。", "WARNING")
         return jsonify({"status": "error", "message": "Bot is not ready yet"}), 503
 
     try:
@@ -143,11 +154,11 @@ def post_castle_event():
         else:
             return jsonify({"status": "error", "message": "Queue failed"}), 503
     except Exception as e:
-        log_system(f"❌ POST内で例外: {traceback.format_exc()}")
+        log_system(f"❌ POST内で例外: {traceback.format_exc()}", "ERROR")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 # Gunicorn起動時に実行
-log_system("🚀 Gunicornのグローバルコンテキストで ensure_bot_started() をトリガーします。")
+log_system("🚀 Gunicornのグローバルコンテキストで ensure_bot_started() をトリガーします。", "INFO")
 ensure_bot_started()
 
 if __name__ == '__main__':
