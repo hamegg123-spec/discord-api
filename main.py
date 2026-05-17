@@ -1,9 +1,12 @@
-# main.py ver27.1 (Render完全統合版)
+# main.py ver27.1 (Render統合・状態管理外部化版)
 import os
 import asyncio
 import datetime
 import traceback
 import discord
+
+# フラグ管理ファイルをインポート
+import state
 
 def log(msg):
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -16,13 +19,12 @@ intents.message_content = True
 intents.guilds = True
 
 bot = discord.Client(intents=intents)
-bot_ready = False
 send_queue = asyncio.Queue()
 
 @bot.event
 async def on_ready():
-    global bot_ready
-    bot_ready = True
+    # stateモジュール側のフラグを更新（循環インポートが発生しない）
+    state.bot_ready = True
     log(f"🟢 Discord Bot ログイン成功: {bot.user}")
     log("所属Guild一覧: " + ", ".join([g.name for g in bot.guilds]))
     
