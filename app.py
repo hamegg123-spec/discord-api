@@ -1,8 +1,9 @@
-# app.py ver27.1 (ヘルスチェック完全最優先・バックグラウンド遅延インポート版)
+# app.py ver27.1 (デバッグ・ログ完全強化版)
 import os
 import threading
 import time
 import traceback
+import sys
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
@@ -10,35 +11,51 @@ app = Flask(__name__)
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 DISCORD_CHANNEL_ID = os.getenv("DISCORD_CHANNEL_ID")
 
-# スレッド重複防止
 bot_thread_lock = threading.Lock()
 bot_thread_started = False
 
+# ログ用のリクエストカウンター
+request_counter = 0
+
+def log_system(msg):
+    """標準出力に即座にログをフラッシュする関数"""
+    print(f"[SYSTEM-DEBUG] [{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}", flush=True)
+
 def get_bot_status_str():
-    # 応答を極限まで軽くするため、try-exceptで安全にステータスを取得
     try:
         from main import bot_ready
         return "ONLINE" if bot_ready else "STARTING"
-    except:
-        return "INITIALIZING"
+    except Exception as e:
+        return f"INITIALIZING_ERR({str(e)})"
 
 def run_discord_bot_core():
-    # Renderが完全に「起動成功」と認識するまで数秒待つ（超重要）
+    log_system("⚠️ バックグラウンドスレッド: 5秒間の待機(time.sleep)を開始します...")
     time.sleep(5)
-    print("[App-Init] 専用スレッド内でDiscordイベントループを起動します...", flush=True)
+    log_system("⚠️ バックグラウンドスレッド: 待機終了。モジュールのインポートを開始します...")
     
-    # 💡 重いインポートと起動処理を、このバックグラウンドスレッドの中で初めて実行する
     try:
         import asyncio
+        log_system("⚠️ asyncio インポート完了。main.py から bot をインポートします...")
+        
+        # ここでメインモジュールを読み込む際のログ
+        start_time = time.time()
         from main import bot
+        log_system(f"⚠️ main.py のインポートが完了しました (所要時間: {time.time() - start_time:.2f}秒)")
+        
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+        
+        log_system("⚠️ bot.start() を呼び出します。Discordへの接続を開始...")
         loop.run_until_complete(bot.start(DISCORD_TOKEN))
+        log_system("⚠️ bot.start() ループが正常に終了しました（通常ここには到達しません）")
+        
     except Exception as e:
-        print(f"[App-Init] ❌ Discord Botが例外で終了しました:\n{traceback.format_exc()}", flush=True)
+        log_system(f"❌ 【致命的】バックグラウンドスレッド内でエラーが発生しました:\n{traceback.format_exc()}")
 
 def ensure_bot_started():
     global bot_thread_started
+    log_system(f"ensure_bot_started が呼ばれました。現在のフラグ: {bot_thread_started}, PID: {os.getpid()}")
+    
     if bot_thread_started:
         return
 
@@ -47,80 +64,88 @@ def ensure_bot_started():
             return
 
         if DISCORD_TOKEN:
-            print("[App-Init] Webワーカープロセス起動を検知。Discordバックグラウンドスレッドを開始します...", flush=True)
+            log_system("🤖 Discordバックグラウンドスレッドを作成し、起動します...")
             bot_thread = threading.Thread(target=run_discord_bot_core, daemon=True)
             bot_thread.start()
             bot_thread_started = True
+            log_system(f"🤖 スレッド起動完了。スレッド名: {bot_thread.name}")
         else:
-            print("[App-Init] ❌ エラー: DISCORD_TOKEN がありません。", flush=True)
+            log_system("❌ エラー: DISCORD_TOKEN が環境変数に設定されていません。")
 
-# ⚠️ 削除: @app.before_request の仕組みはRenderのチェックを遅らせるため撤去します
+# ==========================================
+# 🛠️ スレッド生存監視用のチェッカー（10秒おきに状態を出力）
+# ==========================================
+def monitor_threads():
+    while True:
+        try:
+            active_threads = [t.name for t in threading.enumerate()]
+            log_system(f"【定期巡回】生存スレッド一覧: {active_threads} | メインPID: {os.getpid()}")
+            log_system(f"【定期巡回】Bot状態確認: {get_bot_status_str()}")
+        except Exception as e:
+            log_system(f"チェッカー内エラー: {e}")
+        time.sleep(10)
+
+monitor_thread = threading.Thread(target=monitor_threads, daemon=True, name="SystemMonitor")
+monitor_thread.start()
 
 # ==========================================
 # 3. Flask ルーティング
 # ==========================================
 @app.route('/', methods=['GET', 'HEAD'])
 def index():
-    # 届いた瞬間に1ミリ秒で即答する（これでRenderのチェックを100%パスします）
-    return f"Bot Status: {get_bot_status_str()}", 200
+    global request_counter
+    request_counter += 1
+    
+    # アクセス元のIPやヘッダーを記録してRenderのヘルスチェックが届いているか確認
+    ua = request.headers.get('User-Agent', 'Unknown')
+    log_system(f"📥 [GET /] 受信 (通算 {request_counter} 回目) | UA: {ua} | IP: {request.remote_addr}")
+    
+    status = get_bot_status_str()
+    log_system(f"📤 [GET /] レスポンス返却直前。ステータス: {status}")
+    return f"Bot Status: {status}", 200
 
 @app.route('/postCastleEvent', methods=['POST'])
 def post_castle_event():
-    print("[FlaskAPI] --- /postCastleEvent にリクエストを受信しました ---", flush=True)
-    
+    log_system("[FlaskAPI] --- /postCastleEvent にリクエストを受信しました ---")
+    # (既存のPOSTロジックはver27.1を維持)
     try:
         from main import bot_ready, enqueue_message
     except Exception as e:
+        log_system(f"❌ POSTエラー: mainからのインポート失敗: {e}")
         return jsonify({"status": "error", "message": "System initializing"}), 503
 
     if not bot_ready:
-        print(f"[FlaskAPI] ⚠️ 警告: Discord Botがログインしていません。503を返します。", flush=True)
+        log_system("⚠️ POST警告: Discord Botがログインしていません。503を返します。")
         return jsonify({"status": "error", "message": "Bot is not ready yet"}), 503
 
     try:
         data = request.json
-        print(f"[FlaskAPI] 受信データペイロード: {data}", flush=True)
-        
-        if not data:
-            return jsonify({"status": "error", "message": "Invalid JSON"}), 400
-
         msg_text = None
         target_channel_id = DISCORD_CHANNEL_ID
 
         if isinstance(data, dict):
             msg_text = data.get("text")
-            if data.get("channelId"):
-                target_channel_id = data.get("channelId")
+            if data.get("channelId"): target_channel_id = data.get("channelId")
         elif isinstance(data, list) and len(data) > 0:
             item = data[0]
             city_info = item.get("cityInfo", {})
-            msg_text = (
-                f"城イベント発生！\n"
-                f"国: {item.get('nation')} | 陣営: {city_info.get('faction')}\n"
-                f"場所: {city_info.get('gun')}{city_info.get('city')} ({city_info.get('x')}, {city_info.get('y')})"
-            )
-            if item.get("channelId"):
-                target_channel_id = item.get("channelId")
+            msg_text = f"城イベント発生！\n国: {item.get('nation')} | 場所: {city_info.get('city')}"
+            if item.get("channelId"): target_channel_id = item.get("channelId")
 
-        if not msg_text:
-            msg_text = f"【イベント通知】\n{data}"
-
-        if not target_channel_id:
-            return jsonify({"status": "error", "message": "No target channel id"}), 500
-
-        print(f"[FlaskAPI] キュー転送準備完了 -> チャンネル: {target_channel_id}", flush=True)
+        if not msg_text: msg_text = f"【イベント通知】\n{data}"
+        if not target_channel_id: return jsonify({"status": "error", "message": "No target channel id"}), 500
 
         success = enqueue_message(target_channel_id, msg_text)
         if success:
             return jsonify({"status": "success", "message": "Enqueued"}), 200
         else:
             return jsonify({"status": "error", "message": "Queue failed"}), 503
-
     except Exception as e:
-        print(f"[FlaskAPI] ❌ 致命的エラー:\n{traceback.format_exc()}", flush=True)
+        log_system(f"❌ POST内で例外: {traceback.format_exc()}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
-# Gunicorn（Webサーバー）のメインプロセス起動直後に一度だけ実行させる
+# Gunicorn起動時に実行
+log_system("🚀 Gunicornのグローバルコンテキストで ensure_bot_started() をトリガーします。")
 ensure_bot_started()
 
 if __name__ == '__main__':
