@@ -1,10 +1,13 @@
-# app.py ver27.1 (循環インポート完全修正版)
+# app.py ver27.1 (Gunicorn対応・循環インポート完全分離版)
 import os
 import threading
 import time
 import traceback
 import sys
 from flask import Flask, request, jsonify
+
+# 新設した状態管理モジュールをインポート
+import state
 
 app = Flask(__name__)
 
@@ -22,15 +25,10 @@ def log_system(msg):
     print(f"[SYSTEM-DEBUG] [{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}", flush=True)
 
 def get_bot_status_str():
-    """循環インポートを100%回避し、絶対にエラーを吐かないステータスチェック"""
+    """独立したstateファイルからフラグを読み取るため、絶対にエラーを吐かない"""
     try:
-        # sys.modules からロード済みの main モジュールを安全に取得
-        main_mod = sys.modules.get('main')
-        if main_mod and hasattr(main_mod, 'bot_ready'):
-            return "ONLINE" if main_mod.bot_ready else "STARTING"
-        
-        # mainのインポートが完了する前でも、プロセス自体は動いているためONLINEとみなす
-        return "ONLINE"
+        # sys.modulesの不完全なモジュールを参照するのをやめ、状態フラグを直接確認
+        return "ONLINE" if state.bot_ready else "STARTING"
     except Exception as e:
         return "ONLINE"
 
@@ -112,12 +110,13 @@ def index():
 def post_castle_event():
     log_system("[FlaskAPI] --- /postCastleEvent にリクエストを受信しました ---")
     try:
-        from main import bot_ready, enqueue_message
+        from main import enqueue_message
     except Exception as e:
         log_system(f"❌ POSTエラー: mainからのインポート失敗: {e}")
         return jsonify({"status": "error", "message": "System initializing"}), 503
 
-    if not bot_ready:
+    # stateファイルからログイン状態を安全に取得
+    if not state.bot_ready:
         log_system("⚠️ POST警告: Discord Botがログインしていません。503を返します。")
         return jsonify({"status": "error", "message": "Bot is not ready yet"}), 503
 
