@@ -1,4 +1,4 @@
-# app.py ver27.1 (Gunicorn対応・循環インポート完全分離・ログレベル制御・プロセス起動対策版)
+# app.py ver27.1 (Gunicorn対応・循環インポート完全分離・ログレベル制御・ワーカー限定起動版)
 import os
 import threading
 import time
@@ -64,8 +64,15 @@ def run_discord_bot_core():
 
 def ensure_bot_started():
     global bot_thread_started
-    log_system(f"ensure_bot_started が呼ばれました。現在のフラグ: {bot_thread_started}, PID: {os.getpid()}", "INFO")
     
+    # 🌟【重要】Gunicornのマスタープロセス（Webリクエストを処理しない親プロセス）での起動を徹底的にブロック
+    # Gunicorn環境下では、実際のワーカープロセス以外はスレッドを起動させない
+    if "gunicorn" in sys.argv[0] or os.getenv("SERVER_SOFTWARE", "").startswith("gunicorn"):
+        # マスタープロセスは通常、リクエストを処理しないため、Flaskのコンテキスト（requestフラグ等）がないか、
+        # または特定のPIDになります。ここではリクエスト処理中＝ワーカーと断定し、それ以外（グローバル読み込み）はスキップします。
+        if not request:
+            return
+
     if bot_thread_started:
         return
 
@@ -74,7 +81,7 @@ def ensure_bot_started():
             return
 
         if DISCORD_TOKEN:
-            log_system(f"🤖 Discordバックグラウンドスレッドを作成し、起動します... (PID: {os.getpid()})", "INFO")
+            log_system(f"🤖 ワーカープロセス内でDiscordバックグラウンドスレッドを起動します... (PID: {os.getpid()})", "INFO")
             bot_thread = threading.Thread(target=run_discord_bot_core, daemon=True)
             bot_thread.start()
             bot_thread_started = True
@@ -103,7 +110,7 @@ monitor_thread.start()
 # ==========================================
 @app.route('/', methods=['GET', 'HEAD'])
 def index():
-    # リクエストが来た際にも、このプロセスでBotが起動しているか確認・担保する
+    # 実際のWebアクセス（Renderからのヘルスチェック等）が来た瞬間にワーカー側で起動
     ensure_bot_started()
     
     global request_counter
@@ -159,8 +166,7 @@ def post_castle_event():
         log_system(f"❌ POST内で例外: {traceback.format_exc()}", "ERROR")
         return jsonify({"status": "error", "message": str(e)}), 500
 
-# Gunicornのグローバルコンテキストでも呼び出す
-ensure_bot_started()
+# 🌟一番下にあったグローバルコンテキストでの ensure_bot_started() 呼び出しを削除
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 10000))
